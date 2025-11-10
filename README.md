@@ -1,6 +1,6 @@
-# Randomwalk.M — descriptive guide
+# Randomwalk-FX
 
-Randomwalk.M is a lightweight analysis script that evaluates a simple random-walk forecasting model for the EUR/NOK exchange rate. It is intended as a reproducible demonstration of a baseline forecasting technique and related performance metrics (RMSE, MAE, directional accuracy).
+Randomwalk-FX is a lightweight analysis script that evaluates a simple random-walk forecasting model for the EUR/NOK exchange rate. It is intended as a reproducible demonstration of a baseline forecasting technique and related performance metrics (RMSE, MAE, directional accuracy).
 
 This README explains what the script does, what inputs and outputs to expect, how to run it safely (including common SSL and interpreter issues), and how to package it for sharing on GitHub.
 
@@ -43,30 +43,6 @@ Run the script:
 
 ```bash
 python3.12 RandomwalkM.py
-```
-
-If you still see SSL certificate verification errors when the script downloads the remote CSV, use the `certifi` CA bundle as a quick fix (this is safe and portable):
-
-```bash
-SSL_CERT_FILE=$(python3.12 -c "import certifi; print(certifi.where())") python3.12 RandomwalkM.py
-```
-
-If you run the script with an explicit Python binary (for example `/usr/local/bin/python3.12`), substitute that binary everywhere above to ensure you use the same interpreter for installing packages and running the script.
-
-## Common issues and troubleshooting
-
-- ModuleNotFoundError (e.g. `No module named 'numpy'`): you likely installed packages with a different `pip` than the `python` you run. Fix by running the installer with the same interpreter:
-
-```bash
-/path/to/python3.12 -m pip install --user <package>
-```
-
-- SSL errors (`CERTIFICATE_VERIFY_FAILED`): either run with `SSL_CERT_FILE` set to `certifi.where()` (shown above) or install `certifi` into the interpreter and set the env var. If you installed Python from python.org on macOS, you can also run the shipped `Install Certificates.command`.
-
-- PATH warnings about scripts installed to `~/Library/Python/3.12/bin`: these are helper scripts installed during `--user` installs; add that directory to your `PATH` if you want to run them directly:
-
-```bash
-export PATH="$HOME/Library/Python/3.12/bin:$PATH"
 ```
 
 ## Development & reproducibility
