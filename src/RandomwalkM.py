@@ -1,24 +1,23 @@
 # -*- coding: utf-8 -*-
 """
 Random Walk (RW) – EUR/NOK walk-forward (monthly) without confidence intervals
-Source: GitHub (semicolon-separated, decimal comma)
+Source: variables_daily.csv (All_Variables-link)
 
-- Dataset: EUR/NOK spot from Norges Bank (daily levels), provided via GitHub CSV
+- Dataset: variables_daily.csv (daily wide panel)
+- Only EUR_NOK column is used
 - Evaluation frequency: monthly
-- Cut: last business day in the previous month (based on B-calendar with ffill)
+- Cut: last business day in previous month (based on B-calendar with ffill)
 - Minimum history before cut: min_hist_days
-- Target: monthly mean of daily business-day levels (S_b, B-frequency)
-- Evaluates over ALL available months where the requirements are satisfied
+- Target: monthly mean of daily business-day levels (S_b)
+- Evaluates over ALL available months where requirements are satisfied
 """
 
 from __future__ import annotations
-import io, time
 from dataclasses import dataclass
 from typing import Optional, Dict, Tuple
 
 import numpy as np
 import pandas as pd
-import requests, certifi
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 import matplotlib.pyplot as plt
 
@@ -28,77 +27,62 @@ import matplotlib.pyplot as plt
 @dataclass
 class Config:
     url: str = (
-        "https://raw.githubusercontent.com/bredeespelid/Data_MasterOppgave/"
-        "refs/heads/main/EURNOK/EUR_NOK_NorgesBank.csv"
+        "https://raw.githubusercontent.com/bredeespelid/"
+        "Data_MasterOppgave/refs/heads/main/Variables/All_Variables/variables_daily.csv"
     )
     m_freq: str = "M"      # monthly evaluation
     min_hist_days: int = 40
-    retries: int = 3
-    timeout: int = 60
     verbose: bool = True
     fig_png: str = "EUR_NOK_RW_vs_Actual_Monthly.png"
     fig_pdf: str = "EUR_NOK_RW_vs_Actual_Monthly.pdf"
 
-
 CFG = Config()
-
-# -----------------------------
-# Download helper
-# -----------------------------
-def download_csv_text(url: str, retries: int, timeout: int) -> str:
-    """
-    Download CSV as raw text with simple retry logic.
-    """
-    last_err = None
-    for k in range(1, retries + 1):
-        try:
-            r = requests.get(url, timeout=timeout, verify=certifi.where())
-            r.raise_for_status()
-            return r.text
-        except Exception as e:
-            last_err = e
-            if k < retries:
-                wait = 1.5 * k
-                print(f"[warning] Download failed (try {k}/{retries}): {e}. Retrying in {wait:.1f}s ...")
-                time.sleep(wait)
-    raise RuntimeError(f"Download failed: {last_err}")
+TARGET_SERIES = "EUR_NOK"
 
 # -----------------------------
 # Data
 # -----------------------------
-def load_series(url: str) -> Tuple[pd.Series, pd.Series]:
+def load_series_from_allvariables(url: str) -> Tuple[pd.Series, pd.Series]:
     """
-    Read GitHub CSV (semicolon + decimal comma).
+    Read variables_daily.csv (wide daily panel).
+
+    Expected columns:
+        Date, EUR_NOK, ... (others ignored)
 
     Returns:
       S_b: business-day (B) series with ffill (for cut and monthly target)
-      S_d: daily (D) series with ffill (for history length checks, if needed later)
+      S_d: daily (D) series with ffill (for history checks)
     """
-    text = download_csv_text(url, CFG.retries, CFG.timeout)
-    raw = pd.read_csv(io.StringIO(text), sep=';', encoding='utf-8-sig', decimal=',')
+    raw = pd.read_csv(url)
 
-    # Check expected columns
-    required_cols = {"TIME_PERIOD", "OBS_VALUE"}
+    required_cols = {"Date", TARGET_SERIES}
     missing = required_cols - set(raw.columns)
     if missing:
         raise ValueError(f"Missing columns in CSV: {missing}. Got: {list(raw.columns)}")
 
-    df = (raw[['TIME_PERIOD', 'OBS_VALUE']]
-          .rename(columns={'OBS_VALUE': 'EUR_NOK'})
-          .assign(TIME_PERIOD=lambda x: pd.to_datetime(x['TIME_PERIOD'], errors='coerce'))
-          .dropna(subset=['TIME_PERIOD', 'EUR_NOK'])
-          .sort_values('TIME_PERIOD')
-          .set_index('TIME_PERIOD'))
+    df = (
+        raw[["Date", TARGET_SERIES]]
+        .rename(columns={"Date": "DATE"})
+        .assign(DATE=lambda x: pd.to_datetime(x["DATE"], errors="coerce"))
+        .dropna(subset=["DATE", TARGET_SERIES])
+        .sort_values("DATE")
+        .set_index("DATE")
+    )
 
-    # B-series (target / aggregation)
-    S_b = df['EUR_NOK'].asfreq('B').ffill().astype(float)
-    S_b.name = 'EUR_NOK'
+    # numeric coercion
+    df[TARGET_SERIES] = pd.to_numeric(df[TARGET_SERIES], errors="coerce")
+    df = df.dropna(subset=[TARGET_SERIES])
 
-    # D-series (for potential use in models; here mainly for consistency)
-    full_idx = pd.date_range(df.index.min(), df.index.max(), freq='D')
-    S_d = df['EUR_NOK'].reindex(full_idx).ffill().astype(float)
-    S_d.index.name = 'DATE'
-    S_d.name = 'EUR_NOK'
+    # B-series (target / aggregation base)
+    S_b = df[TARGET_SERIES].asfreq("B").ffill().astype(float)
+    S_b.name = TARGET_SERIES
+
+    # D-series (calendar days)
+    full_idx = pd.date_range(df.index.min(), df.index.max(), freq="D")
+    S_d = df[TARGET_SERIES].reindex(full_idx).ffill().astype(float)
+    S_d.index.name = "DATE"
+    S_d.name = TARGET_SERIES
+
     return S_b, S_d
 
 
@@ -124,7 +108,7 @@ def walk_forward_rw_monthly(S_b: pd.Series, S_d: pd.Series) -> pd.DataFrame:
     - History requirement is checked on daily data (S_d) up to the cut.
     """
     first_m = pd.Period(S_b.index.min(), freq=CFG.m_freq)
-    last_m  = pd.Period(S_b.index.max(),  freq=CFG.m_freq)
+    last_m  = pd.Period(S_b.index.max(), freq=CFG.m_freq)
     months = pd.period_range(first_m, last_m, freq=CFG.m_freq)
 
     rows: Dict[str, Dict] = {}
@@ -135,26 +119,22 @@ def walk_forward_rw_monthly(S_b: pd.Series, S_d: pd.Series) -> pd.DataFrame:
         m_start, m_end = m.start_time, m.end_time
         prev_start, prev_end = prev_m.start_time, prev_m.end_time
 
-        # Cut in the previous month
         cut = last_trading_day(S_b, prev_start, prev_end)
         if cut is None:
             dropped[str(m)] = "no_cut_in_prev_month"
             continue
 
-        # History requirement (daily data up to the cut)
         hist_d = S_d.loc[:cut]
         if hist_d.size < CFG.min_hist_days:
             dropped[str(m)] = f"hist<{CFG.min_hist_days}"
             continue
 
-        # Business days inside the month (target)
         idx_m_b = S_b.index[(S_b.index >= m_start) & (S_b.index <= m_end)]
         if idx_m_b.size < 1:
             dropped[str(m)] = "no_bdays_in_month"
             continue
         y_true = float(S_b.loc[idx_m_b].mean())
 
-        # RW forecast: last observed B-day level at the cut
         y_pred = float(S_b.loc[cut])
 
         rows[str(m)] = {
@@ -164,7 +144,7 @@ def walk_forward_rw_monthly(S_b: pd.Series, S_d: pd.Series) -> pd.DataFrame:
             "y_pred": y_pred,
         }
 
-    df = pd.DataFrame.from_dict(rows, orient='index')
+    df = pd.DataFrame.from_dict(rows, orient="index")
     if not df.empty:
         df = df.set_index("month").sort_index()
 
@@ -172,8 +152,8 @@ def walk_forward_rw_monthly(S_b: pd.Series, S_d: pd.Series) -> pd.DataFrame:
         miss = [str(m) for m in months if m not in df.index]
         if miss:
             print("\nDropped months and reasons:")
-            for m in miss:
-                print(f"  {m}: {dropped.get(m, 'unknown')}")
+            for mm in miss:
+                print(f"  {mm}: {dropped.get(mm, 'unknown')}")
 
     return df
 
@@ -192,7 +172,6 @@ def evaluate(df: pd.DataFrame) -> pd.DataFrame:
     rmse = float(np.sqrt(mean_squared_error(eval_df["y_true"], eval_df["y_pred"]))) if n_obs else np.nan
     mae  = float(mean_absolute_error(eval_df["y_true"], eval_df["y_pred"])) if n_obs else np.nan
 
-    # Directional accuracy: sign of change from previous month
     eval_df["y_prev"] = eval_df["y_true"].shift(1)
     mask = eval_df["y_prev"].notna()
     dir_true = np.sign(eval_df.loc[mask, "y_true"] - eval_df.loc[mask, "y_prev"])
@@ -211,12 +190,11 @@ def evaluate(df: pd.DataFrame) -> pd.DataFrame:
     return eval_df
 
 # -----------------------------
-# Plot – same style as TimesFM example (no bands)
+# Plot (no bands)
 # -----------------------------
 def plot_monthly_rw(eval_df: pd.DataFrame, png_path: str, pdf_path: str):
     """
-    Plot actual monthly means vs. Random Walk forecasts
-    using a simple, clean style similar to the TimesFM example.
+    Plot actual monthly means vs. Random Walk forecasts.
     """
     if eval_df.empty:
         print("Nothing to plot.")
@@ -225,9 +203,7 @@ def plot_monthly_rw(eval_df: pd.DataFrame, png_path: str, pdf_path: str):
     plt.figure(figsize=(10, 6))
     x = eval_df.index.to_timestamp() if isinstance(eval_df.index, pd.PeriodIndex) else eval_df.index
 
-    # Actual: black line
     plt.plot(x, eval_df["y_true"], color="black", label="Actual (monthly mean, B-days)")
-    # RW forecast: blue dashed line
     plt.plot(x, eval_df["y_pred"], color="tab:blue", linestyle="--",
              label="Forecast (Random Walk)")
 
@@ -248,21 +224,14 @@ def plot_monthly_rw(eval_df: pd.DataFrame, png_path: str, pdf_path: str):
 # Main
 # -----------------------------
 def main():
-    # 1) Load data
-    S_b, S_d = load_series(CFG.url)
+    S_b, S_d = load_series_from_allvariables(CFG.url)
     if CFG.verbose:
         print(f"Data (B): {S_b.index.min().date()} → {S_b.index.max().date()} | n={len(S_b)}")
         print(f"Data (D): {S_d.index.min().date()} → {S_d.index.max().date()} | n={len(S_d)}")
 
-    # 2) Monthly Random Walk walk-forward
     df_eval = walk_forward_rw_monthly(S_b, S_d)
-
-    # 3) Evaluation
     eval_df = evaluate(df_eval)
-
-    # 4) Plot in the same simple style (no confidence intervals)
     plot_monthly_rw(eval_df, CFG.fig_png, CFG.fig_pdf)
-
 
 if __name__ == "__main__":
     main()

@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Random Walk (RW) walk-forward (next quarter) on Norges Bank EUR/NOK data:
+Random Walk (RW) walk-forward (next quarter) on Norges Bank EUR/NOK data
+using variables_daily.csv (All_Variables-link):
 
-- Dataset: EUR/NOK spot from Norges Bank (daily levels), provided via GitHub CSV
-- Cut: last business day in the previous quarter (based on B-calendar with ffill)
+- Dataset: variables_daily.csv (daily wide panel)
+- Only EUR_NOK column is used
+- Cut: last business day in previous quarter (based on B-calendar with ffill)
 - Minimum history before cut: min_hist_days
 - Target: quarterly mean of daily business-day levels
 - Evaluates over ALL available quarters where the requirements are satisfied
@@ -22,10 +24,10 @@ import matplotlib.pyplot as plt
 # -----------------------------
 @dataclass
 class Config:
-    # Source: GitHub CSV (Norges Bank EUR/NOK, semicolon-separated, decimal comma)
+    # Source: All variables daily panel (wide CSV)
     url: str = (
-        "https://raw.githubusercontent.com/bredeespelid/Data_MasterOppgave/"
-        "refs/heads/main/EURNOK/EUR_NOK_NorgesBank.csv"
+        "https://raw.githubusercontent.com/bredeespelid/"
+        "Data_MasterOppgave/refs/heads/main/Variables/All_Variables/variables_daily.csv"
     )
     business_freq: str = "B"     # business days
     q_freq: str = "Q-DEC"        # quarterly periods with December year-end
@@ -34,8 +36,9 @@ class Config:
     fig_png: str = "EUR_NOK_RW_vs_Actual.png"
     fig_pdf: str = "EUR_NOK_RW_vs_Actual.pdf"
 
-
 CFG = Config()
+
+TARGET_SERIES = "EUR_NOK"
 
 # -----------------------------
 # Helpers
@@ -44,7 +47,8 @@ def last_trading_day(series: pd.Series,
                      start: pd.Timestamp,
                      end: pd.Timestamp) -> Optional[pd.Timestamp]:
     """
-    Return the last available business day in [start, end] for a pre-filled B-calendar series.
+    Return the last available business day in [start, end]
+    for a pre-filled B-calendar series.
     """
     window = series.loc[start:end]
     if window.empty:
@@ -52,38 +56,40 @@ def last_trading_day(series: pd.Series,
     return window.index[-1]
 
 
-def load_business_series(url: str) -> pd.Series:
+def load_business_series_from_allvariables(url: str) -> pd.Series:
     """
-    Load EUR/NOK series from GitHub CSV (semicolon + decimal comma),
-    convert to a business-day (B) frequency with forward fill.
+    Load EUR_NOK from variables_daily.csv (wide daily panel),
+    convert to business-day (B) frequency with forward fill.
+
+    Expected columns:
+        Date, EUR_NOK, ... (other vars ignored)
 
     Returns:
         S_b: pd.Series with B-frequency and EUR/NOK levels.
     """
-    df = pd.read_csv(
-        url,
-        sep=";",
-        encoding="utf-8-sig",
-        decimal=","
-    )
+    raw = pd.read_csv(url)
 
-    required_cols = {"TIME_PERIOD", "OBS_VALUE"}
-    missing = required_cols - set(df.columns)
+    required_cols = {"Date", TARGET_SERIES}
+    missing = required_cols - set(raw.columns)
     if missing:
-        raise ValueError(f"Missing columns in CSV: {missing}. Got: {list(df.columns)}")
+        raise ValueError(f"Missing columns in CSV: {missing}. Got: {list(raw.columns)}")
 
     df = (
-        df[["TIME_PERIOD", "OBS_VALUE"]]
-        .rename(columns={"OBS_VALUE": "EUR_NOK"})
-        .assign(TIME_PERIOD=lambda x: pd.to_datetime(x["TIME_PERIOD"], errors="coerce"))
-        .dropna(subset=["TIME_PERIOD", "EUR_NOK"])
-        .sort_values("TIME_PERIOD")
-        .set_index("TIME_PERIOD")
+        raw[["Date", TARGET_SERIES]]
+        .rename(columns={"Date": "DATE"})
+        .assign(DATE=lambda x: pd.to_datetime(x["DATE"], errors="coerce"))
+        .dropna(subset=["DATE", TARGET_SERIES])
+        .sort_values("DATE")
+        .set_index("DATE")
     )
 
-    # Business-day series with forward fill (no weekend observations in source)
-    S_b = df["EUR_NOK"].asfreq(CFG.business_freq).ffill().astype(float)
-    S_b.name = "EUR_NOK"
+    # numeric coercion
+    df[TARGET_SERIES] = pd.to_numeric(df[TARGET_SERIES], errors="coerce")
+    df = df.dropna(subset=[TARGET_SERIES])
+
+    # Business-day series with forward fill
+    S_b = df[TARGET_SERIES].asfreq(CFG.business_freq).ffill().astype(float)
+    S_b.name = TARGET_SERIES
     return S_b
 
 # -----------------------------
@@ -109,28 +115,22 @@ def walk_forward_rw(S_b: pd.Series) -> pd.DataFrame:
         q_start, q_end = q.start_time, q.end_time
         prev_start, prev_end = prev_q.start_time, prev_q.end_time
 
-        # Cut in the previous quarter
         cut = last_trading_day(S_b, prev_start, prev_end)
         if cut is None:
             dropped[str(q)] = "no_cut_in_prev_q"
             continue
 
-        # History requirement before cut
         hist = S_b.loc[:cut]
         if hist.size < CFG.min_hist_days:
             dropped[str(q)] = f"hist<{CFG.min_hist_days}"
             continue
 
-        # Business days inside the quarter
         idx_q = S_b.index[(S_b.index >= q_start) & (S_b.index <= q_end)]
         if idx_q.size < 1:
             dropped[str(q)] = "no_bdays_in_q"
             continue
 
-        # Target: quarterly mean (business days)
         y_true = float(S_b.loc[idx_q].mean())
-
-        # RW forecast: last observed level at cut
         y_pred = float(S_b.loc[cut])
 
         rows[str(q)] = {
@@ -168,7 +168,6 @@ def evaluate(eval_df: pd.DataFrame) -> pd.DataFrame:
     rmse = float(np.sqrt(np.mean(np.square(df["err"])))) if n_obs else np.nan
     mae = float(mean_absolute_error(df["y_true"], df["y_pred"])) if n_obs else np.nan
 
-    # Directional accuracy: sign of change from previous quarter
     df["y_prev"] = df["y_true"].shift(1)
     mask = df["y_prev"].notna()
     dir_true = np.sign(df.loc[mask, "y_true"] - df.loc[mask, "y_prev"])
@@ -184,7 +183,6 @@ def evaluate(eval_df: pd.DataFrame) -> pd.DataFrame:
     if total:
         print(f"Directional accuracy: {hits}/{total} ({hit_rate*100:.1f}%)")
 
-    # Show first/last rows for inspection
     with pd.option_context("display.width", 120, "display.max_columns", None):
         print("\nFirst 5 rows:")
         print(df[["cut", "y_true", "y_pred"]].head(5))
@@ -199,10 +197,6 @@ def evaluate(eval_df: pd.DataFrame) -> pd.DataFrame:
 def plot_quarterly_rw(eval_df: pd.DataFrame,
                       png_path: str,
                       pdf_path: str) -> None:
-    """
-    Plot actual quarterly means vs. Random Walk forecasts
-    using the same simple style as in the TimesFM example.
-    """
     if eval_df.empty:
         print("Nothing to plot.")
         return
@@ -210,10 +204,7 @@ def plot_quarterly_rw(eval_df: pd.DataFrame,
     plt.figure(figsize=(10, 6))
     x = eval_df.index.to_timestamp() if isinstance(eval_df.index, pd.PeriodIndex) else eval_df.index
 
-    # Actual: black line
     plt.plot(x, eval_df["y_true"], color="black", label="Actual (quarterly mean)")
-
-    # RW forecast: blue dashed line
     plt.plot(x, eval_df["y_pred"], color="tab:blue", linestyle="--",
              label="Forecast (Random Walk)")
 
@@ -234,21 +225,14 @@ def plot_quarterly_rw(eval_df: pd.DataFrame,
 # Main
 # -----------------------------
 def main():
-    # 1) Load business-day series
-    S_b = load_business_series(CFG.url)
+    S_b = load_business_series_from_allvariables(CFG.url)
     if CFG.verbose:
         print(f"Data (B): {S_b.index.min().date()} → {S_b.index.max().date()} | n={len(S_b)}")
         print(S_b.describe())
 
-    # 2) Walk-forward Random Walk benchmark
     df_eval = walk_forward_rw(S_b)
-
-    # 3) Evaluation
     eval_df = evaluate(df_eval)
-
-    # 4) Plot in the same style as the TimesFM example (no confidence bands)
     plot_quarterly_rw(eval_df, CFG.fig_png, CFG.fig_pdf)
-
 
 if __name__ == "__main__":
     main()
