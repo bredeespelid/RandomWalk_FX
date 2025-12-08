@@ -7,19 +7,21 @@ A lightweight baseline project that evaluates a **random-walk forecasting model*
 - Demonstrate an end-to-end random-walk workflow: data retrieval, forecast construction, and evaluation.
 - Serve as a reference point for comparing more complex ML and econometric models in the thesis.
 
-## Repository Contents
-- `RandomwalkM.py` — random-walk benchmark using **monthly aggregation**.
-- `Randomwalk.py` — random-walk benchmark using **quarterly aggregation**.
+## Repository Structure
+- `src/` — executable Python scripts for the random-walk benchmarks.
+- `data/` — (optional) local data outputs if you choose to save results.
 - `requirements.txt` — pinned dependencies for reproducibility.
 - `LICENSE` — MIT License.
 
 ## Scripts
+All scripts are located in `src/`.
+
 ### Price-Only Random-Walk (PO)
 - **RandomwalkM.py** — monthly random-walk benchmark for EUR/NOK.  
-  Link: [`RandomwalkM.py`](RandomwalkM.py)
+  Link: [`src/RandomwalkM.py`](src/RandomwalkM.py)
 
 - **Randomwalk.py** — quarterly random-walk benchmark for EUR/NOK.  
-  Link: [`Randomwalk.py`](Randomwalk.py)
+  Link: [`src/Randomwalk.py`](src/Randomwalk.py)
 
 ## What the Scripts Do
 - Download a CSV time series of EUR/NOK rates from a configured HTTPS source.
